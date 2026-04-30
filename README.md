@@ -57,7 +57,7 @@ cargo build --release
 ### Phase 1: Tactical Hardening (Q1-Q2 2026)
 - [x] **Core SPN Engine**: Implementation of deterministic chaos and dynamic S-Boxes.
 - [x] **Post-Quantum Layer**: Integration of ML-KEM (Kyber-1024).
-- [ ] **MFA Keyfiles**: Support for external entropy sources (files) to bypass keyloggers.
+- [x] **MFA Keyfiles**: Support for external entropy sources (files) to bypass keyloggers.
 - [ ] **Advanced Shredding**: Implementation of Gutmann method (35 passes) for data destruction.
 - [ ] **Anti-VM Shield**: Heuristic detection of virtualization and debuggers (Anti-Forensics)
 
