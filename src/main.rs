@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use spektr::SpektrVolume;
-use std::{fs, process, time::Duration};
+use std::{process, time::Duration};
 
 const BANNER: &str = r#"
  ███████╗██████╗ ███████╗██╗  ██╗████████╗██████╗      ██████╗  ██████╗ 
@@ -33,15 +33,19 @@ enum Commands {
         decoy_pass: String,
         #[arg(long)]
         decoy_data: String,
+
+        #[arg(short = 'k', long)]
+        keyfile: Option<String>, 
     },
     Open {
         #[arg(short, long)]
         input: String,
         #[arg(short, long)]
         password: String,
-        
         #[arg(long, default_value_t = false)]
         panic: bool,
+        #[arg(short = 'k', long)]
+        keyfile: Option<String>,
     },
 }
 
@@ -50,48 +54,41 @@ fn main() {
     println!("{}", " — СИСТЕМА КРИПТОГРАФИЧЕСКОЙ СТЕГАНОГРАФИИ — ".on_black().white());
     println!();
 
-    let cli = Cli::parse();
+let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Create { output, real_pass, real_data, decoy_pass, decoy_data } => {
-            let pb = create_spinner("Генерация мастер-ключа...");
+        Commands::Create { output, real_pass, real_data, decoy_pass, decoy_data, keyfile } => {
+            let pb = create_spinner("Генерация мастер-ключа (Argon2id + MFA)...");
             
             let result = SpektrVolume::create(
-                output,
-                real_pass,
-                real_data.as_bytes(),
-                decoy_pass,
-                decoy_data.as_bytes(),
-            );
+    output,
+    real_pass,
+    real_data.as_bytes(),
+    decoy_pass,
+    decoy_data.as_bytes(),
+    keyfile.as_ref(),
+);
+
+pb.finish_and_clear(); 
+
+match result { 
+    Ok(_) => {
+        println!("{} {}", "[+] SUCCESS:".green().bold(), "Контейнер успешно инициализирован.");
+    }
+    Err(e) => {
+        println!("{} {}", "[-] ERROR:".red().bold(), e);
+        process::exit(1);
+    }
+}
             
             pb.finish_and_clear();
-
-            match result {
-                Ok(_) => {
-                    println!("{} {}", "SUCCESS:".green().bold(), "Контейнер успешно инициализирован.");
-                    println!("{} {}", "FILE:".cyan(), output);
-                    println!("{} {}", "STATUS:".cyan(), "Метаданные скрыты в WAV-потоке.");
-                }
-                Err(e) => {
-                    println!("{} {}", "[-] ERROR:".red().bold(), e);
-                    process::exit(1);
-                }
-            }
         }
-        Commands::Open { input, password, panic } => {
-            if !fs::metadata(input).is_ok() {
-                println!("{} {}", "ERROR:".red().bold(), "Файл не найден.");
-                process::exit(1);
-            }
-
-            let spinner_text = if *panic {
-                "Активация Panic-ключа и затирание данных...".red().bold().to_string()
-            } else {
-                "Аутентификация и Hardware DNA сканирование...".white().to_string()
-            };
-
-            let pb = create_spinner(&spinner_text);
-            let result = SpektrVolume::open(input, password, *panic);
+        Commands::Open { input, password, panic, keyfile } => {
+  
+            let pb = create_spinner("Аутентификация (Hardware DNA + Keyfile)...");
+            
+            let result = SpektrVolume::open(input, password, *panic, keyfile.as_ref());
+            
             pb.finish_and_clear();
 
             match result {

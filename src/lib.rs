@@ -7,6 +7,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use pqc_kyber::*;
+use std::io::BufReader;
 
 pub const SLOT_SIZE: usize = 1024 * 1024;
 pub const FULL_SLOT_SIZE: usize = 16 + 32 + SLOT_SIZE;
@@ -79,14 +80,22 @@ impl SpektrCore {
 pub struct SpektrVolume;
 
 impl SpektrVolume {
-    pub fn create(path: &str, r_pass: &str, r_data: &[u8], d_pass: &str, d_data: &[u8]) -> std::io::Result<()> {
+    pub fn create(
+        path: &str, 
+        r_pass: &str, 
+        r_data: &[u8], 
+        d_pass: &str, 
+        d_data: &[u8],
+        keyfile: Option<&String>
+    ) -> std::io::Result<()> {
         let mut salt = [0u8; 16]; OsRng.fill_bytes(&mut salt);
         let mut vol = vec![0u8; 16 + (FULL_SLOT_SIZE * 2)];
         OsRng.fill_bytes(&mut vol);
         vol[0..16].copy_from_slice(&salt);
 
-        vol[16..16+FULL_SLOT_SIZE].copy_from_slice(&Self::pack(d_pass, &salt, d_data));
-        vol[16+FULL_SLOT_SIZE..].copy_from_slice(&Self::pack(r_pass, &salt, r_data));
+        // Передаем keyfile в pack (Decoy обычно без keyfile, но для гибкости оставим)
+        vol[16..16+FULL_SLOT_SIZE].copy_from_slice(&Self::pack(d_pass, &salt, d_data, None)); 
+        vol[16+FULL_SLOT_SIZE..].copy_from_slice(&Self::pack(r_pass, &salt, r_data, keyfile));
 
         let mut f = File::create(path)?;
         f.write_all(&Self::header(vol.len() as u32))?;
@@ -94,13 +103,14 @@ impl SpektrVolume {
         Ok(())
     }
 
-    pub fn open(path: &str, pass: &str, panic: bool) -> Result<Vec<u8>, &'static str> {
-        let mut f = File::open(path).map_err(|_| "Not found")?;
+    pub fn open(path: &str, pass: &str, panic: bool, keyfile: Option<&String>) -> Result<Vec<u8>, &'static str> {
+        let mut f = File::open(path).map_err(|_| "Файл не найден")?;
         let mut buf = Vec::new(); f.read_to_end(&mut buf).unwrap();
         let raw = &buf[WAV_HEADER_SIZE..];
         let mut salt = [0u8; 16]; salt.copy_from_slice(&raw[0..16]);
         
-        let keys = derive_keys(pass, &salt);
+        let keys = derive_keys(pass, &salt, keyfile); // <-- Проброс keyfile
+        
         for &off in &[16, 16 + FULL_SLOT_SIZE] {
             let slot = &raw[off..off + FULL_SLOT_SIZE];
             let (nonce, tag, ct) = (&slot[0..16], &slot[16..48], &slot[48..]);
@@ -114,11 +124,11 @@ impl SpektrVolume {
                 return Ok(pt[4..4+len].to_vec());
             }
         }
-        Err("Auth failed")
+        Err("Ошибка аутентификации: неверный пароль, Hardware DNA или Keyfile")
     }
 
-    fn pack(p: &str, s: &[u8; 16], d: &[u8]) -> Vec<u8> {
-        let k = derive_keys(p, s);
+    fn pack(p: &str, s: &[u8; 16], d: &[u8], kf: Option<&String>) -> Vec<u8> {
+        let k = derive_keys(p, s, kf); // <-- Проброс keyfile
         let mut n = [0u8; 16]; OsRng.fill_bytes(&mut n);
         let mut pt = vec![0u8; SLOT_SIZE]; OsRng.fill_bytes(&mut pt);
         pt[0..4].copy_from_slice(&(d.len() as u32).to_le_bytes());
@@ -151,15 +161,37 @@ impl SpektrVolume {
     }
 }
 
-fn derive_keys(p: &str, s: &[u8; 16]) -> ([u8; 32], [u8; 32]) {
+fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u8; 32]) {
     let mut hw = get_hw();
-    let mut inp = p.as_bytes().to_vec(); inp.extend_from_slice(&hw);
+    let mut kf_entropy = vec![0u8; 32];
+    
+    // Если передан путь к файлу, хешируем его содержимое
+    if let Some(path) = kf_path {
+        if let Ok(file) = File::open(path) {
+            let mut reader = BufReader::new(file);
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 8192];
+            while let Ok(n) = reader.read(&mut buffer) {
+                if n == 0 { break; }
+                hasher.update(&buffer[..n]);
+            }
+            kf_entropy = hasher.finalize().to_vec();
+        }
+    }
+
+    let mut inp = p.as_bytes().to_vec();
+    inp.extend_from_slice(&hw);
+    inp.extend_from_slice(&kf_entropy); // Смешиваем Пароль + Железо + Файл
+
     let mut out = [0u8; 64];
     Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, Params::new(65536, 3, 1, Some(64)).unwrap())
         .hash_password_into(&inp, s, &mut out).unwrap();
+    
     let mut c = [0u8; 32]; let mut m = [0u8; 32];
     c.copy_from_slice(&out[0..32]); m.copy_from_slice(&out[32..64]);
+    
     hw.zeroize();
+    kf_entropy.zeroize(); // Очищаем временную энтропию
     (c, m)
 }
 
@@ -186,12 +218,10 @@ impl PqcIdentity {
     }
 }
 
-/// Механизм передачи (Инкапсуляция)
 pub struct PqcTransmission;
 
 impl PqcTransmission {
-    /// Шаг 1 (Отправитель): Создает Shared Secret и шифрует его публичным ключом получателя
-    /// Возвращает: (Шифротекст для отправки, Мастер-ключ для SPEKTR-26)
+
     pub fn encapsulate(recipient_pub: &PublicKey) -> (Vec<u8>, [u8; 32]) {
         let mut rng = rand_core::OsRng;
         let (ciphertext, shared_secret) = encapsulate(recipient_pub, &mut rng)
@@ -202,9 +232,6 @@ impl PqcTransmission {
         
         (ciphertext.to_vec(), master_key)
     }
-
-    /// Шаг 2 (Получатель): Расшифровывает Shared Secret своим секретным ключом
-    /// Возвращает Мастер-ключ для SPEKTR-26
     pub fn decapsulate(ciphertext: &[u8], my_secret: &SecretKey) -> Result<[u8; 32], &'static str> {
         if ciphertext.len() != KYBER_CIPHERTEXTBYTES {
             return Err("Неверный размер постквантового шифротекста");
