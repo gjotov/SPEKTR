@@ -45,6 +45,7 @@
 ### Build / Сборка
 ```bash
 cargo build --release
+```
 
 ---
 
