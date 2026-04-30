@@ -1,0 +1,13 @@
+[package]
+name = "overdrive_x"
+version = "4.0.0-TRINITY"
+edition = "2024"
+
+[dependencies]
+zeroize = { version = "1.7.0", features = ["zeroize_derive"] }
+rayon = "1.8.0"
+rand_core = { version = "0.6.4", features = ["std"] }
+argon2 = "0.5.2"
+hmac = "0.12.1"
+sha2 = "0.10.8"
+machine-uid = "0.3.0" # Крейт для чтения ID материнской платы/CPU
