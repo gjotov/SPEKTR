@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use zeroize::{Zeroize, ZeroizeOnDrop};
+use pqc_kyber::*;
 
 pub const SLOT_SIZE: usize = 1024 * 1024;
 pub const FULL_SLOT_SIZE: usize = 16 + 32 + SLOT_SIZE;
@@ -166,5 +167,56 @@ fn get_hw() -> [u8; 32] {
     #[cfg(miri)] return [0x42; 32];
     #[cfg(not(miri))] {
         Sha256::digest(machine_uid::get().unwrap_or_else(|_| "ID".into()).as_bytes()).into()
+    }
+}
+pub struct PqcIdentity {
+    pub public_key: PublicKey,
+    pub secret_key: SecretKey,
+}
+
+impl PqcIdentity {
+    /// Генерация новой постквантовой пары ключей
+    pub fn generate() -> Self {
+        let mut rng = rand_core::OsRng;
+        let keys = keypair(&mut rng).expect("Отказ генератора постквантовых ключей");
+        Self {
+            public_key: keys.public,
+            secret_key: keys.secret,
+        }
+    }
+}
+
+/// Механизм передачи (Инкапсуляция)
+pub struct PqcTransmission;
+
+impl PqcTransmission {
+    /// Шаг 1 (Отправитель): Создает Shared Secret и шифрует его публичным ключом получателя
+    /// Возвращает: (Шифротекст для отправки, Мастер-ключ для SPEKTR-26)
+    pub fn encapsulate(recipient_pub: &PublicKey) -> (Vec<u8>, [u8; 32]) {
+        let mut rng = rand_core::OsRng;
+        let (ciphertext, shared_secret) = encapsulate(recipient_pub, &mut rng)
+            .expect("Ошибка инкапсуляции PQC");
+        
+        let mut master_key = [0u8; 32];
+        master_key.copy_from_slice(&shared_secret);
+        
+        (ciphertext.to_vec(), master_key)
+    }
+
+    /// Шаг 2 (Получатель): Расшифровывает Shared Secret своим секретным ключом
+    /// Возвращает Мастер-ключ для SPEKTR-26
+    pub fn decapsulate(ciphertext: &[u8], my_secret: &SecretKey) -> Result<[u8; 32], &'static str> {
+        if ciphertext.len() != KYBER_CIPHERTEXTBYTES {
+            return Err("Неверный размер постквантового шифротекста");
+        }
+        let mut ct_array = [0u8; KYBER_CIPHERTEXTBYTES];
+        ct_array.copy_from_slice(ciphertext);
+
+        let shared_secret = decapsulate(&ct_array, my_secret)
+            .map_err(|_| "Квантовая расшифровка не удалась (Возможна подмена)")?;
+
+        let mut master_key = [0u8; 32];
+        master_key.copy_from_slice(&shared_secret);
+        Ok(master_key)
     }
 }

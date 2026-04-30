@@ -1,4 +1,4 @@
-use overdrive_x::SpektrVolume;
+use spektr::SpektrVolume;
 use std::fs;
 use std::path::Path;
 
