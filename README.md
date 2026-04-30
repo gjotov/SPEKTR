@@ -54,17 +54,17 @@ cargo build --release
 **SPEKTR-26** is constantly evolving. Below is our development path for 2026.
 **СПЕКТР-26** постоянно развивается. Ниже представлен наш план разработки на 2026 гг.
 
-### Phase 1: Tactical Hardening / Тактическое усиление (Q1-Q2 2026)
+### Phase 1: Tactical Hardening (Q1-Q2 2026)
 - [x] **Core SPN Engine**: Implementation of deterministic chaos and dynamic S-Boxes.
 - [x] **Post-Quantum Layer**: Integration of ML-KEM (Kyber-1024).
 - [ ] **MFA Keyfiles**: Support for external entropy sources (files) to bypass keyloggers.
 - [ ] **Advanced Shredding**: Implementation of Gutmann method (35 passes) for data destruction.
 - [ ] **Anti-VM Shield**: Heuristic detection of virtualization and debuggers (Anti-Forensics)
 
-### Phase 2: Ecosystem Expansion / Расширение экосистемы (Q3-Q4 2026)
+### Phase 2: Expansion (Q3-Q4 2026)
 - [ ] **Encrypted P2P**: Secure post-quantum channel for direct container transmission.
 
-### Phase 3: Hardware & Enterprise / Аппаратная защита и Enterprise (2026)
+### Phase 3: Hardware & Enterprise (2026-2027)
 - [ ] **TPM 2.0 Integration**: Binding "Silicon DNA" to the hardware Trusted Platform Module.
 - [ ] **SPEKTR-Token**: Custom USB hardware token for physical key storage.
 - [ ] **Network Protocol**: A decentralized protocol for anonymous metadata-free data exchange.
