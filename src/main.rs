@@ -46,7 +46,7 @@ enum Commands {
 }
 
 fn main() {
-    println!("{}", BANNER.bright_cyan().bold());
+    println!("{}", BANNER.bright_white().bold());
     println!("{}", " — СИСТЕМА КРИПТОГРАФИЧЕСКОЙ СТЕГАНОГРАФИИ — ".on_black().white());
     println!();
 
@@ -118,7 +118,7 @@ fn create_spinner(msg: &str) -> ProgressBar {
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_style(
-        ProgressStyle::with_template("{spinner:.cyan} {msg}")
+        ProgressStyle::with_template("{spinner:.white} {msg}")
             .unwrap()
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
     );
