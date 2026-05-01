@@ -7,7 +7,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use pqc_kyber::*;
-use std::io::BufReader;
+use std::io::{Seek, BufReader};
 
 pub const SLOT_SIZE: usize = 1024 * 1024;
 pub const FULL_SLOT_SIZE: usize = 16 + 32 + SLOT_SIZE;
@@ -93,7 +93,7 @@ impl SpektrVolume {
         OsRng.fill_bytes(&mut vol);
         vol[0..16].copy_from_slice(&salt);
 
-        // Передаем keyfile в pack (Decoy обычно без keyfile, но для гибкости оставим)
+        // Передача keyfile в pack
         vol[16..16+FULL_SLOT_SIZE].copy_from_slice(&Self::pack(d_pass, &salt, d_data, None)); 
         vol[16+FULL_SLOT_SIZE..].copy_from_slice(&Self::pack(r_pass, &salt, r_data, keyfile));
 
@@ -124,30 +124,72 @@ impl SpektrVolume {
                 return Ok(pt[4..4+len].to_vec());
             }
         }
-        Err("Ошибка аутентификации: неверный пароль, Hardware DNA или Keyfile")
+        Err("Auth error: invalid password, Hardware DNA or Keyfile")
     }
 
     fn pack(p: &str, s: &[u8; 16], d: &[u8], kf: Option<&String>) -> Vec<u8> {
-        let k = derive_keys(p, s, kf); // <-- Проброс keyfile
+        let k = derive_keys(p, s, kf);
+
         let mut n = [0u8; 16]; OsRng.fill_bytes(&mut n);
         let mut pt = vec![0u8; SLOT_SIZE]; OsRng.fill_bytes(&mut pt);
+
         pt[0..4].copy_from_slice(&(d.len() as u32).to_le_bytes());
         pt[4..4+d.len()].copy_from_slice(d);
+
         SpektrCore::new(&k.0).process(&mut pt, &n);
+
         let mut hmac = HmacSha256::new_from_slice(&k.1).unwrap();
         hmac.update(&n); hmac.update(&pt);
         let mut res = Vec::with_capacity(FULL_SLOT_SIZE);
+        
         res.extend_from_slice(&n); res.extend_from_slice(&hmac.finalize().into_bytes());
         res.extend_from_slice(&pt);
         res
     }
 
-    fn shred(p: &str, s: usize) {
-        if let Ok(mut f) = OpenOptions::new().write(true).open(p) {
-            let mut n = vec![0u8; s]; OsRng.fill_bytes(&mut n);
-            let _ = f.write_all(&n); let _ = f.sync_all();
+    fn shred(path: &str, size: usize) {
+        let patterns: [[u8; 3]; 27] = [
+            [0x55, 0x55, 0x55], [0xAA, 0xAA, 0xAA], [0x92, 0x49, 0x24],
+            [0x49, 0x24, 0x92], [0x24, 0x92, 0x49], [0x00, 0x00, 0x00],
+            [0x11, 0x11, 0x11], [0x22, 0x22, 0x22], [0x33, 0x33, 0x33],
+            [0x44, 0x44, 0x44], [0x66, 0x66, 0x66], [0x77, 0x77, 0x77],
+            [0x88, 0x88, 0x88], [0x99, 0x99, 0x99], [0xBB, 0xBB, 0xBB],
+            [0xCC, 0xCC, 0xCC], [0xDD, 0xDD, 0xDD], [0xEE, 0xEE, 0xEE],
+            [0xFF, 0xFF, 0xFF], [0x92, 0x49, 0x24], [0x49, 0x24, 0x92],
+            [0x24, 0x92, 0x49], [0x6D, 0xB6, 0xDB], [0xB6, 0xDB, 0x6D],
+            [0xDB, 0x6D, 0xB6], [0x00, 0x00, 0x00], [0xFF, 0xFF, 0xFF]
+        ];
+
+        if let Ok(mut f) = OpenOptions::new().write(true).open(path) {
+            let mut buf = vec![0u8; size];
+
+            // Фаза 1: 4 прохода случайными числами
+            for _ in 0..4 {
+                OsRng.fill_bytes(&mut buf);
+                f.rewind().unwrap();
+                f.write_all(&buf).unwrap();
+                f.sync_all().unwrap(); 
+            }
+
+            // Фаза 2: 27 проходов паттернами Гутманна
+            for p in patterns.iter() {
+                for i in 0..size {
+                    buf[i] = p[i % 3];
+                }
+                f.rewind().unwrap();
+                f.write_all(&buf).unwrap();
+                f.sync_all().unwrap();
+            }
+
+            // Фаза 3: Финальные 4 прохода случайными числами
+            for _ in 0..4 {
+                OsRng.fill_bytes(&mut buf);
+                f.rewind().unwrap();
+                f.write_all(&buf).unwrap();
+                f.sync_all().unwrap();
+            }
         }
-        let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(path); // Окончательное удаление из ФС
     }
 
     fn header(sz: u32) -> [u8; 44] {
@@ -165,7 +207,7 @@ fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u
     let mut hw = get_hw();
     let mut kf_entropy = vec![0u8; 32];
     
-    // Если передан путь к файлу, хешируем его содержимое
+    // Если передается путь к файлу, хешируем его содержимое
     if let Some(path) = kf_path {
         if let Ok(file) = File::open(path) {
             let mut reader = BufReader::new(file);
@@ -181,7 +223,7 @@ fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u
 
     let mut inp = p.as_bytes().to_vec();
     inp.extend_from_slice(&hw);
-    inp.extend_from_slice(&kf_entropy); // Смешиваем Пароль + Железо + Файл
+    inp.extend_from_slice(&kf_entropy); // Пароль + Железо + Файл
 
     let mut out = [0u8; 64];
     Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, Params::new(65536, 3, 1, Some(64)).unwrap())
@@ -191,7 +233,7 @@ fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u
     c.copy_from_slice(&out[0..32]); m.copy_from_slice(&out[32..64]);
     
     hw.zeroize();
-    kf_entropy.zeroize(); // Очищаем временную энтропию
+    kf_entropy.zeroize();
     (c, m)
 }
 
@@ -210,7 +252,7 @@ impl PqcIdentity {
     /// Генерация новой постквантовой пары ключей
     pub fn generate() -> Self {
         let mut rng = rand_core::OsRng;
-        let keys = keypair(&mut rng).expect("Отказ генератора постквантовых ключей");
+        let keys = keypair(&mut rng).expect("Post-quantum key generation failed");
         Self {
             public_key: keys.public,
             secret_key: keys.secret,
@@ -225,7 +267,7 @@ impl PqcTransmission {
     pub fn encapsulate(recipient_pub: &PublicKey) -> (Vec<u8>, [u8; 32]) {
         let mut rng = rand_core::OsRng;
         let (ciphertext, shared_secret) = encapsulate(recipient_pub, &mut rng)
-            .expect("Ошибка инкапсуляции PQC");
+            .expect("Imcapsulation error PQC");
         
         let mut master_key = [0u8; 32];
         master_key.copy_from_slice(&shared_secret);
@@ -234,13 +276,13 @@ impl PqcTransmission {
     }
     pub fn decapsulate(ciphertext: &[u8], my_secret: &SecretKey) -> Result<[u8; 32], &'static str> {
         if ciphertext.len() != KYBER_CIPHERTEXTBYTES {
-            return Err("Неверный размер постквантового шифротекста");
+            return Err("Invalid size of post-quantum ciphertext");
         }
         let mut ct_array = [0u8; KYBER_CIPHERTEXTBYTES];
         ct_array.copy_from_slice(ciphertext);
 
         let shared_secret = decapsulate(&ct_array, my_secret)
-            .map_err(|_| "Квантовая расшифровка не удалась (Возможна подмена)")?;
+            .map_err(|_| "Quantum decryption failed (Possible tampering)")?;
 
         let mut master_key = [0u8; 32];
         master_key.copy_from_slice(&shared_secret);
