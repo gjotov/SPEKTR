@@ -1,0 +1,12 @@
+==================================================
+             STRICT AVALANCHE CRITERION TEST      
+==================================================
+
+Interations: 100000
+Duration time: 4.5598986s
+--------------------------------------------------
+Ideal avalanche effect:   50.0000 %
+Spektr-26 avalanche effect:   50.2511 %
+Deviation from ideal:       0.2511 %
+--------------------------------------------------
+Chipher meets the strict avalanche criterion.

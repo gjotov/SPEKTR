@@ -54,7 +54,14 @@ pub struct SpektrCore { sbox: SpektrSBox, keys: [u8; 32] }
 
 impl SpektrCore {
     pub fn new(key: &[u8; 32]) -> Self {
-        let mut chaos = SpektrChaos::new(u64::from_le_bytes(key[0..8].try_into().unwrap()));
+        let mut seed: u64 = 0x9E3779B97F4A7C15; 
+        for chunk in key.chunks_exact(8) {
+            let val = u64::from_le_bytes(chunk.try_into().unwrap());
+            seed ^= val;
+            seed = seed.wrapping_add(val.rotate_left(13)); 
+        }
+
+        let mut chaos = SpektrChaos::new(seed);
         let sbox = SpektrSBox::new(&mut chaos);
         let mut keys = [0u8; 32];
         for k in &mut keys { *k = (chaos.next_u32() & 0xFF) as u8; }
@@ -93,7 +100,7 @@ impl SpektrVolume {
         OsRng.fill_bytes(&mut vol);
         vol[0..16].copy_from_slice(&salt);
 
-        // Передача keyfile в pack
+        // Move the keyfile argument down to the pack function calls
         vol[16..16+FULL_SLOT_SIZE].copy_from_slice(&Self::pack(d_pass, &salt, d_data, None)); 
         vol[16+FULL_SLOT_SIZE..].copy_from_slice(&Self::pack(r_pass, &salt, r_data, keyfile));
 
@@ -163,7 +170,7 @@ impl SpektrVolume {
         if let Ok(mut f) = OpenOptions::new().write(true).open(path) {
             let mut buf = vec![0u8; size];
 
-            // Фаза 1: 4 прохода случайными числами
+            // Phase 1: Random overwrites
             for _ in 0..4 {
                 OsRng.fill_bytes(&mut buf);
                 f.rewind().unwrap();
@@ -171,7 +178,7 @@ impl SpektrVolume {
                 f.sync_all().unwrap(); 
             }
 
-            // Фаза 2: 27 проходов паттернами Гутманна
+            // Phase 2: Gutmann-like patterns   
             for p in patterns.iter() {
                 for i in 0..size {
                     buf[i] = p[i % 3];
@@ -181,7 +188,7 @@ impl SpektrVolume {
                 f.sync_all().unwrap();
             }
 
-            // Фаза 3: Финальные 4 прохода случайными числами
+            // Phase 3: Final random pass
             for _ in 0..4 {
                 OsRng.fill_bytes(&mut buf);
                 f.rewind().unwrap();
@@ -189,7 +196,7 @@ impl SpektrVolume {
                 f.sync_all().unwrap();
             }
         }
-        let _ = std::fs::remove_file(path); // Окончательное удаление из ФС
+        let _ = std::fs::remove_file(path); // Detele the file after shredding
     }
 
     fn header(sz: u32) -> [u8; 44] {
@@ -207,7 +214,7 @@ fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u
     let mut hw = get_hw();
     let mut kf_entropy = vec![0u8; 32];
     
-    // Если передается путь к файлу, хешируем его содержимое
+    // If a file path is passed, hash its contents
     if let Some(path) = kf_path {
         if let Ok(file) = File::open(path) {
             let mut reader = BufReader::new(file);
@@ -223,7 +230,7 @@ fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u
 
     let mut inp = p.as_bytes().to_vec();
     inp.extend_from_slice(&hw);
-    inp.extend_from_slice(&kf_entropy); // Пароль + Железо + Файл
+    inp.extend_from_slice(&kf_entropy); // Password + Hardware + Keyfile
 
     let mut out = [0u8; 64];
     Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, Params::new(65536, 3, 1, Some(64)).unwrap())
@@ -249,7 +256,7 @@ pub struct PqcIdentity {
 }
 
 impl PqcIdentity {
-    /// Генерация новой постквантовой пары ключей
+    /// Generates a new post-quantum key pair
     pub fn generate() -> Self {
         let mut rng = rand_core::OsRng;
         let keys = keypair(&mut rng).expect("Post-quantum key generation failed");
