@@ -103,7 +103,6 @@ fn main() {
             let (ct, shared_secret) = PqcTransmission::encapsulate(&pk);
             let password = hex::encode(shared_secret);
 
-            // Создаем контейнер (Decoy в PQC режиме по умолчанию пустой)
             SpektrVolume::create(output, &password, data.as_bytes(), s!("decoy"), b" ", None).unwrap();
             fs::write(format!("{}.seal", output), ct).unwrap();
 
@@ -111,7 +110,7 @@ fn main() {
             println!("{}", s!("ENVELOPE_CREATED"));
         }
 
-        // --- PQC OPEN (НОВЫЙ) ---
+        // --- PQC OPEN  ---
         Commands::PqcOpen { input, sealkey, privkey } => {
             let pb = create_spinner(s!("DECAPSULATING..."));
             
