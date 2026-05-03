@@ -16,6 +16,9 @@ hex = "0.4.3"
 clap = { version = "4.4", features = ["derive"] }
 colored = "2.1.0"
 indicatif = "0.17.7"
+obfstr = "0.4.3"
+sysinfo = "0.30.12"
+lazy_static = "1.4"
 
 [[bin]]
 name = "spektr"
@@ -28,3 +31,4 @@ path = "src/bin/nist_dump.rs"
 [[bin]]
 name = "avalanche"
 path = "src/bin/avalanche.rs"
+

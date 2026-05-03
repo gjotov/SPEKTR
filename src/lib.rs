@@ -4,18 +4,34 @@ use rand_core::{OsRng, RngCore};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
-use zeroize::{Zeroize, ZeroizeOnDrop};
-use pqc_kyber::*;
-use std::io::{Seek, BufReader,SeekFrom,};
+use std::io::{Read, Write, Seek, SeekFrom, BufReader};
 use std::time::Instant;
 use std::thread;
+use sysinfo::{System, Disks};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+use pqc_kyber::*;
 
 pub const SLOT_SIZE: usize = 1024 * 1024;
 pub const FULL_SLOT_SIZE: usize = 16 + 32 + SLOT_SIZE;
 const WAV_HEADER_SIZE: usize = 44;
 
 type HmacSha256 = Hmac<Sha256>;
+
+#[derive(Debug)]
+pub enum SpektrError {
+    IoError,
+    AuthenticationFailed,
+    QuantumKeyError,
+    ContainerCorrupted,
+    EnvironmentUnsafe,
+}
+
+impl From<std::io::Error> for SpektrError {
+    fn from(_: std::io::Error) -> Self {
+        SpektrError::IoError
+    }
+}
+
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 struct SpektrChaos { state: u64 }
@@ -62,7 +78,6 @@ impl SpektrCore {
             seed ^= val;
             seed = seed.wrapping_add(val.rotate_left(13)); 
         }
-
         let mut chaos = SpektrChaos::new(seed);
         let sbox = SpektrSBox::new(&mut chaos);
         let mut keys = [0u8; 32];
@@ -86,136 +101,61 @@ impl SpektrCore {
     }
 }
 
-pub struct SpektrVolume;
+pub fn anti_forensics_check() -> bool {
+    let mut score = 0;
+    let cores = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    if cores <= 2 { score += 1; }
 
-impl SpektrVolume {
-    pub fn create(
-        path: &str, 
-        r_pass: &str, 
-        r_data: &[u8], 
-        d_pass: &str, 
-        d_data: &[u8],
-        keyfile: Option<&String>
-    ) -> std::io::Result<()> {
-        let mut salt = [0u8; 16]; OsRng.fill_bytes(&mut salt);
-        let mut vol = vec![0u8; 16 + (FULL_SLOT_SIZE * 2)];
-        OsRng.fill_bytes(&mut vol);
-        vol[0..16].copy_from_slice(&salt);
+    let start = Instant::now();
+    thread::sleep(std::time::Duration::from_millis(10));
+    if start.elapsed().as_millis() > 25 { score += 1; }
 
-        // Move the keyfile argument down to the pack function calls
-        vol[16..16+FULL_SLOT_SIZE].copy_from_slice(&Self::pack(d_pass, &salt, d_data, None)); 
-        vol[16+FULL_SLOT_SIZE..].copy_from_slice(&Self::pack(r_pass, &salt, r_data, keyfile));
+    let math_start = Instant::now();
+    let mut _x = 0u64;
+    for i in 0..1_000_000 { _x = _x.wrapping_add(i); }
+    if math_start.elapsed().as_millis() > 50 { score += 1; }
 
-        let mut f = File::create(path)?;
-        f.write_all(&Self::header(vol.len() as u32))?;
-        f.write_all(&vol)?;
-        Ok(())
-    }
-
-    pub fn open(path: &str, pass: &str, panic: bool, keyfile: Option<&String>) -> Result<Vec<u8>, &'static str> {
-        let mut f = File::open(path).map_err(|_| "Файл не найден")?;
-        let mut buf = Vec::new(); f.read_to_end(&mut buf).unwrap();
-        let raw = &buf[WAV_HEADER_SIZE..];
-        let mut salt = [0u8; 16]; salt.copy_from_slice(&raw[0..16]);
-        
-        let keys = derive_keys(pass, &salt, keyfile); // <-- Проброс keyfile
-        
-        for &off in &[16, 16 + FULL_SLOT_SIZE] {
-            let slot = &raw[off..off + FULL_SLOT_SIZE];
-            let (nonce, tag, ct) = (&slot[0..16], &slot[16..48], &slot[48..]);
-            let mut hmac = HmacSha256::new_from_slice(&keys.1).unwrap();
-            hmac.update(nonce); hmac.update(ct);
-            if hmac.verify_slice(tag).is_ok() {
-                let mut pt = ct.to_vec();
-                SpektrCore::new(&keys.0).process(&mut pt, nonce.try_into().unwrap());
-                if panic { Self::shred(path, buf.len()); }
-                let len = u32::from_le_bytes(pt[0..4].try_into().unwrap()) as usize;
-                return Ok(pt[4..4+len].to_vec());
-            }
-        }
-        Err("Auth error: invalid password, Hardware DNA or Keyfile")
-    }
-
-    fn pack(p: &str, s: &[u8; 16], d: &[u8], kf: Option<&String>) -> Vec<u8> {
-        let k = derive_keys(p, s, kf);
-
-        let mut n = [0u8; 16]; OsRng.fill_bytes(&mut n);
-        let mut pt = vec![0u8; SLOT_SIZE]; OsRng.fill_bytes(&mut pt);
-
-        pt[0..4].copy_from_slice(&(d.len() as u32).to_le_bytes());
-        pt[4..4+d.len()].copy_from_slice(d);
-
-        SpektrCore::new(&k.0).process(&mut pt, &n);
-
-        let mut hmac = HmacSha256::new_from_slice(&k.1).unwrap();
-        hmac.update(&n); hmac.update(&pt);
-        let mut res = Vec::with_capacity(FULL_SLOT_SIZE);
-        
-        res.extend_from_slice(&n); res.extend_from_slice(&hmac.finalize().into_bytes());
-        res.extend_from_slice(&pt);
-        res
-    }
-
-    pub fn shred(path: &str, size: usize) {
-        if let Ok(mut f) = OpenOptions::new().write(true).open(path) {
-            let mut buf = vec![0u8; size];
-            
-            for _ in 0..4 {
-                OsRng.fill_bytes(&mut buf);
-                let _ = f.seek(SeekFrom::Start(0));
-                let _ = f.write_all(&buf);
-                let _ = f.sync_all();
-            }
-
-            let patterns: [[u8; 3]; 27] = [
-                [0x55, 0x55, 0x55], [0xAA, 0xAA, 0xAA], [0x92, 0x49, 0x24],
-                [0x49, 0x24, 0x92], [0x24, 0x92, 0x49], [0x00, 0x00, 0x00],
-                [0x11, 0x11, 0x11], [0x22, 0x22, 0x22], [0x33, 0x33, 0x33],
-                [0x44, 0x44, 0x44], [0x66, 0x66, 0x66], [0x77, 0x77, 0x77],
-                [0x88, 0x88, 0x88], [0x99, 0x99, 0x99], [0xBB, 0xBB, 0xBB],
-                [0xCC, 0xCC, 0xCC], [0xDD, 0xDD, 0xDD], [0xEE, 0xEE, 0xEE],
-                [0xFF, 0xFF, 0xFF], [0x92, 0x49, 0x24], [0x49, 0x24, 0x92],
-                [0x24, 0x92, 0x49], [0x6D, 0xB6, 0xDB], [0xB6, 0xDB, 0x6D],
-                [0xDB, 0x6D, 0xB6], [0x00, 0x00, 0x00], [0xFF, 0xFF, 0xFF]
-            ];
-
-            for p in patterns.iter() {
-                for i in 0..size {
-                    buf[i] = p[i % 3];
-                }
-                let _ = f.seek(SeekFrom::Start(0));
-                let _ = f.write_all(&buf);
-                let _ = f.sync_all();
-            }
-
-            for _ in 0..4 {
-                OsRng.fill_bytes(&mut buf);
-                let _ = f.seek(SeekFrom::Start(0));
-                let _ = f.write_all(&buf);
-                let _ = f.sync_all();
-            }
-        }
-        
-        let _ = std::fs::remove_file(path);
-    }
-
-    fn header(sz: u32) -> [u8; 44] {
-        let mut h = [0u8; 44];
-        h[0..4].copy_from_slice(b"RIFF"); h[4..8].copy_from_slice(&(sz + 36).to_le_bytes());
-        h[8..16].copy_from_slice(b"WAVEfmt "); h[16..20].copy_from_slice(&16u32.to_le_bytes());
-        h[20..24].copy_from_slice(&[1, 0, 1, 0]); h[24..28].copy_from_slice(&44100u32.to_le_bytes());
-        h[28..32].copy_from_slice(&44100u32.to_le_bytes()); h[32..36].copy_from_slice(&[1, 0, 8, 0]);
-        h[36..40].copy_from_slice(b"data"); h[40..44].copy_from_slice(&sz.to_le_bytes());
-        h
-    }
+    score >= 2
 }
 
-fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u8; 32]) {
-    let mut hw = get_hw();
+pub fn get_hardware_dna() -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(machine_uid::get().unwrap_or_else(|_| "ID".into()).as_bytes());
+
+    let mut s = System::new_all();
+    s.refresh_all(); 
+    for cpu in s.cpus() {
+        hasher.update(cpu.brand().as_bytes());
+        hasher.update(cpu.frequency().to_le_bytes()); 
+    }
+    hasher.update(s.total_memory().to_le_bytes());
+
+    let disks = Disks::new_with_refreshed_list();
+    for disk in &disks {
+        hasher.update(disk.name().as_encoded_bytes());
+        hasher.update(disk.file_system().as_encoded_bytes());
+    }
+
+    if let Ok(val) = std::env::var("COMPUTERNAME") { hasher.update(val.as_bytes()); }
+    if let Ok(val) = std::env::var("USERNAME") { hasher.update(val.as_bytes()); }
+
+    // Тихое отравление (Poisoning)
+    if anti_forensics_check() {
+        hasher.update(b"ENV_COMPROMISED");
+    }
+
+    let mut dna = [0u8; 32];
+    dna.copy_from_slice(&hasher.finalize());
+    dna
+}
+
+// --- ГЕНЕРАЦИЯ КЛЮЧЕЙ ---
+
+fn derive_keys(p: &str, s: &[u8; 16], kf: Option<&String>) -> ([u8; 32], [u8; 32]) {
+    let mut hw = get_hardware_dna();
     let mut kf_entropy = vec![0u8; 32];
-    
-    // If a file path is passed, hash its contents
-    if let Some(path) = kf_path {
+
+    if let Some(path) = kf {
         if let Ok(file) = File::open(path) {
             let mut reader = BufReader::new(file);
             let mut hasher = Sha256::new();
@@ -230,104 +170,127 @@ fn derive_keys(p: &str, s: &[u8; 16], kf_path: Option<&String>) -> ([u8; 32], [u
 
     let mut inp = p.as_bytes().to_vec();
     inp.extend_from_slice(&hw);
-    inp.extend_from_slice(&kf_entropy); // Password + Hardware + Keyfile
+    inp.extend_from_slice(&kf_entropy);
 
     let mut out = [0u8; 64];
-    Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, Params::new(65536, 3, 1, Some(64)).unwrap())
+    let params = Params::new(65536, 3, 1, Some(64)).unwrap();
+    Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
         .hash_password_into(&inp, s, &mut out).unwrap();
     
     let mut c = [0u8; 32]; let mut m = [0u8; 32];
     c.copy_from_slice(&out[0..32]); m.copy_from_slice(&out[32..64]);
-    
-    hw.zeroize();
-    kf_entropy.zeroize();
+    hw.zeroize(); kf_entropy.zeroize();
     (c, m)
 }
 
-fn get_hw() -> [u8; 32] {
-    #[cfg(miri)] return [0x42; 32];
-    #[cfg(not(miri))] {
-        Sha256::digest(machine_uid::get().unwrap_or_else(|_| "ID".into()).as_bytes()).into()
+pub struct SpektrVolume;
+
+impl SpektrVolume {
+    pub fn create(path: &str, rp: &str, rd: &[u8], dp: &str, dd: &[u8], kf: Option<&String>) -> Result<(), SpektrError> {
+        let mut salt = [0u8; 16]; OsRng.fill_bytes(&mut salt);
+        let mut vol = vec![0u8; 16 + (FULL_SLOT_SIZE * 2)];
+        OsRng.fill_bytes(&mut vol);
+        vol[0..16].copy_from_slice(&salt);
+
+        vol[16..16+FULL_SLOT_SIZE].copy_from_slice(&Self::pack(dp, &salt, dd, None)); 
+        vol[16+FULL_SLOT_SIZE..].copy_from_slice(&Self::pack(rp, &salt, rd, kf));
+
+        let mut f = File::create(path)?;
+        f.write_all(&Self::header(vol.len() as u32))?;
+        f.write_all(&vol)?;
+        Ok(())
+    }
+
+    pub fn open(path: &str, pass: &str, panic: bool, kf: Option<&String>) -> Result<Vec<u8>, SpektrError> {
+        let mut f = File::open(path)?;
+        let mut buf = Vec::new(); f.read_to_end(&mut buf).unwrap();
+        let raw = &buf[WAV_HEADER_SIZE..];
+        let mut salt = [0u8; 16]; salt.copy_from_slice(&raw[0..16]);
+        
+        let keys = derive_keys(pass, &salt, kf);
+        
+        for &off in &[16, 16 + FULL_SLOT_SIZE] {
+            let slot = &raw[off..off + FULL_SLOT_SIZE];
+            let (nonce, tag, ct) = (&slot[0..16], &slot[16..48], &slot[48..]);
+            let mut hmac = HmacSha256::new_from_slice(&keys.1).unwrap();
+            hmac.update(nonce); hmac.update(ct);
+            if hmac.verify_slice(tag).is_ok() {
+                let mut pt = ct.to_vec();
+                SpektrCore::new(&keys.0).process(&mut pt, nonce.try_into().unwrap());
+                if panic { Self::shred(path, buf.len()); }
+                let len = u32::from_le_bytes(pt[0..4].try_into().unwrap()) as usize;
+                if len > SLOT_SIZE - 4 { return Err(SpektrError::ContainerCorrupted); }
+                return Ok(pt[4..4+len].to_vec());
+            }
+        }
+        Err(SpektrError::AuthenticationFailed)
+    }
+
+    fn pack(p: &str, s: &[u8; 16], d: &[u8], kf: Option<&String>) -> Vec<u8> {
+        let k = derive_keys(p, s, kf);
+        let mut n = [0u8; 16]; OsRng.fill_bytes(&mut n);
+        let mut pt = vec![0u8; SLOT_SIZE]; OsRng.fill_bytes(&mut pt);
+        pt[0..4].copy_from_slice(&(d.len() as u32).to_le_bytes());
+        pt[4..4+d.len()].copy_from_slice(d);
+        SpektrCore::new(&k.0).process(&mut pt, &n);
+        let mut hmac = HmacSha256::new_from_slice(&k.1).unwrap();
+        hmac.update(&n); hmac.update(&pt);
+        let mut res = Vec::with_capacity(FULL_SLOT_SIZE);
+        res.extend_from_slice(&n); res.extend_from_slice(&hmac.finalize().into_bytes());
+        res.extend_from_slice(&pt);
+        res
+    }
+
+    pub fn shred(path: &str, size: usize) {
+        if let Ok(mut f) = OpenOptions::new().write(true).open(path) {
+            let mut buf = vec![0u8; size];
+            for cycle in 1..=35 {
+                if cycle <= 4 || cycle > 31 { OsRng.fill_bytes(&mut buf); }
+                else { buf.fill(if cycle % 2 == 0 { 0x55 } else { 0xAA }); }
+                let _ = f.seek(SeekFrom::Start(0));
+                let _ = f.write_all(&buf);
+                let _ = f.sync_all();
+            }
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn header(sz: u32) -> [u8; 44] {
+        let mut h = [0u8; 44];
+        h[0..4].copy_from_slice(b"RIFF"); h[4..8].copy_from_slice(&(sz + 36).to_le_bytes());
+        h[8..16].copy_from_slice(b"WAVEfmt "); h[16..20].copy_from_slice(&16u32.to_le_bytes());
+        h[20..24].copy_from_slice(&[1, 0, 1, 0]); h[24..28].copy_from_slice(&44100u32.to_le_bytes());
+        h[28..32].copy_from_slice(&44100u32.to_le_bytes()); h[32..36].copy_from_slice(&[1, 0, 8, 0]);
+        h[36..40].copy_from_slice(b"data"); h[40..44].copy_from_slice(&sz.to_le_bytes());
+        h
     }
 }
-pub struct PqcIdentity {
-    pub public_key: PublicKey,
-    pub secret_key: SecretKey,
-}
 
+// --- ПОСТКВАНТОВЫЙ ОБМЕН ---
+
+pub struct PqcIdentity { pub public_key: PublicKey, pub secret_key: SecretKey }
 impl PqcIdentity {
-    /// Generates a new post-quantum key pair
     pub fn generate() -> Self {
-        let mut rng = rand_core::OsRng;
-        let keys = keypair(&mut rng).expect("Post-quantum key generation failed");
-        Self {
-            public_key: keys.public,
-            secret_key: keys.secret,
-        }
+        let mut rng = OsRng;
+        let keys = keypair(&mut rng).expect("PQC Gen Failed");
+        Self { public_key: keys.public, secret_key: keys.secret }
     }
 }
 
 pub struct PqcTransmission;
-
 impl PqcTransmission {
-
     pub fn encapsulate(recipient_pub: &PublicKey) -> (Vec<u8>, [u8; 32]) {
-        let mut rng = rand_core::OsRng;
-        let (ciphertext, shared_secret) = encapsulate(recipient_pub, &mut rng)
-            .expect("Imcapsulation error PQC");
-        
-        let mut master_key = [0u8; 32];
-        master_key.copy_from_slice(&shared_secret);
-        
-        (ciphertext.to_vec(), master_key)
-    }
-    pub fn decapsulate(ciphertext: &[u8], my_secret: &SecretKey) -> Result<[u8; 32], &'static str> {
-        if ciphertext.len() != KYBER_CIPHERTEXTBYTES {
-            return Err("Invalid size of post-quantum ciphertext");
-        }
-        let mut ct_array = [0u8; KYBER_CIPHERTEXTBYTES];
-        ct_array.copy_from_slice(ciphertext);
-
-        let shared_secret = decapsulate(&ct_array, my_secret)
-            .map_err(|_| "Quantum decryption failed (Possible tampering)")?;
-
-        let mut master_key = [0u8; 32];
-        master_key.copy_from_slice(&shared_secret);
-        Ok(master_key)
-    }
-}
-
-
-pub fn anti_forensics_check() -> bool {
-    let mut suspicion_score = 0;
-
-    // 1. Check number of cores
-    // Sandboxes (Cuckoo, Any.Run) and analyst VMs are often limited to 1-2 cores for cost savings.
-    let cores = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-    if cores <= 2 {
-        suspicion_score += 1;
+        let mut rng = OsRng;
+        let (ct, ss) = encapsulate(recipient_pub, &mut rng).expect("PQC Encapsulation Error");
+        let mut key = [0u8; 32]; key.copy_from_slice(&ss);
+        (ct.to_vec(), key)
     }
 
-    // 2. Timing attack (Time Distortion)
-    // In a virtual machine or under a debugger, API calls (e.g., sleep) 
-    // are processed through the hypervisor, causing micro-delays.
-    let start = Instant::now();
-    thread::sleep(std::time::Duration::from_millis(10));
-    let elapsed = start.elapsed().as_millis();
-    if elapsed > 25 { // If 10ms turned into 25ms+ -> we're being intercepted
-        suspicion_score += 1;
+    pub fn decapsulate(ct: &[u8], my_secret: &SecretKey) -> Result<[u8; 32], SpektrError> {
+        if ct.len() != KYBER_CIPHERTEXTBYTES { return Err(SpektrError::QuantumKeyError); }
+        let mut ct_arr = [0u8; KYBER_CIPHERTEXTBYTES]; ct_arr.copy_from_slice(ct);
+        let ss = decapsulate(&ct_arr, my_secret).map_err(|_| SpektrError::QuantumKeyError)?;
+        let mut key = [0u8; 32]; key.copy_from_slice(&ss);
+        Ok(key)
     }
-
-    // 3. Computational anomaly (Instruction Tracing Check)
-    // If code is executed step-by-step (in a debugger), this loop will take forever.
-    let math_start = Instant::now();
-    let mut _x = 0u64;
-    for i in 0..1_000_000 {
-        _x = _x.wrapping_add(i);
-    }
-    if math_start.elapsed().as_millis() > 50 {
-        suspicion_score += 1;
-    }
-
-    suspicion_score >= 2
 }

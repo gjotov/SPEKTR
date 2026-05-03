@@ -1,0 +1,26 @@
+name: Production Clean Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Позволяет запускать сборку вручную
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Production Binary
+        run: |
+          $env:RUSTFLAGS = "-C debuginfo=0 -C strip=symbols -C panic=abort -C target-feature=+aes,+ssse3 --remap-path-prefix=${{ github.workspace }}=/ --remap-path-prefix=$HOME=.cargo"
+          cargo build --release --bin spektr
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPEKTR-26-Windows-Clean
+          path: target/release/spektr.exe
