@@ -41,6 +41,32 @@
 [**Полная спецификация (RU)**](docs/SPEC_RU.md) | [**Инструкция по запуску**](#usage)
 
 ---
+## Roadmap / План развития
+### Phase 1: Tactical Hardening (Completed 1.0)
+- [x] Core SPN Engine: Deterministic chaos and dynamic S-Boxes.
+
+- [x] Post-Quantum Layer: Integration of ML-KEM (Kyber-1024).
+
+- [x] MFA Keyfiles: Support for external entropy sources.
+
+- [x] Advanced Shredding: Gutmann method (35 passes) implementation.
+
+- [x] Anti-VM Shield: Protection against analysis in virtual environments.
+### Phase 2: Ecosystem Expansion (Q2 2026)
+
+- [ ] GUI Dashboard: Cross-platform desktop application (Tauri).
+
+- [ ] Mobile Port: Android/iOS version for secure steganography.
+
+- [ ] Encrypted P2P: Secure post-quantum channel for direct transmission.
+### Phase 3: Hardware & Enterprise (Q3 2026)
+
+- [ ] TPM 2.0 Integration: Hardware-level "Silicon DNA" binding.
+
+- [ ] SPEKTR-Token: Custom USB hardware token for physical key storage.
+
+Kernel-Level Protection: Anti-memory-dump drivers.
+---
 
 <a name="usage"></a>
 ## 🚀 Usage / Использование
