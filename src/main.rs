@@ -78,7 +78,7 @@ fn main() {
     match &cli.command {
         // --- CREATE ---
         Commands::Create { output, p, d, dp, dd, k } => {
-            let pb = create_spinner(s!("INITIALIZING_CORE..."));
+            let pb = create_spinner(s!("INITIALIZING_CORE...").to_string());
             let result = SpektrVolume::create(output, p, d.as_bytes(), dp, dd.as_bytes(), k.as_ref());
             pb.finish_and_clear();
             if result.is_ok() { println!("{}", s!("STATUS: OK")); } else { process::exit(1); }
@@ -86,7 +86,7 @@ fn main() {
 
         // --- OPEN ---
         Commands::Open { input, p, panic, k } => {
-            let pb = create_spinner(s!("AUTHENTICATING..."));
+            let pb = create_spinner(s!("AUTHENTICATING...").to_string());
             let result = SpektrVolume::open(input, p, *panic, k.as_ref());
             pb.finish_and_clear();
             match result {
@@ -105,7 +105,7 @@ fn main() {
 
         // --- PQC SEAL  ---
         Commands::Seal { output, pubkey, data } => {
-            let pb = create_spinner(s!("QUANTUM_SEALING..."));
+            let pb = create_spinner(s!("QUANTUM_SEALING...").to_string());
             
             let pub_bytes = fs::read(pubkey).expect("E_PK");
             let mut pk_arr = [0u8; KYBER_PUBLICKEYBYTES];
@@ -124,7 +124,7 @@ fn main() {
 
         // --- PQC OPEN  ---
         Commands::PqcOpen { input, sealkey, privkey } => {
-            let pb = create_spinner(s!("DECAPSULATING..."));
+            let pb = create_spinner(s!("DECAPSULATING...").to_string());
             
             let sec_bytes = fs::read(privkey).expect("E_SK");
             let mut sk_arr = [0u8; KYBER_SECRETKEYBYTES];
