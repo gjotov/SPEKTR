@@ -56,8 +56,6 @@
 
 - [ ] GUI Dashboard: Cross-platform desktop application (Tauri).
 
-- [ ] Mobile Port: Android/iOS version for secure steganography.
-
 - [ ] Encrypted P2P: Secure post-quantum channel for direct transmission.
 ### Phase 3: Hardware & Enterprise (Q3 2026)
 
