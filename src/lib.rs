@@ -188,15 +188,22 @@ pub struct SpektrVolume;
 impl SpektrVolume {
     pub fn create(path: &str, rp: &str, rd: &[u8], dp: &str, dd: &[u8], kf: Option<&String>) -> Result<(), SpektrError> {
         let mut salt = [0u8; 16]; OsRng.fill_bytes(&mut salt);
-        let mut vol = vec![0u8; 16 + (FULL_SLOT_SIZE * 2)];
-        OsRng.fill_bytes(&mut vol);
-        vol[0..16].copy_from_slice(&salt);
 
+        // --- DYNAMIC PADDING ---
+        let mut rng = OsRng;
+        
+        let junk_size = (rng.next_u32() as usize % (1900 * 1024)) + (100 * 1024);
+        let total_size = 16 + (FULL_SLOT_SIZE * 2) + junk_size;
+        
+        let mut vol = vec![0u8; total_size];
+        OsRng.fill_bytes(&mut vol);
+        
+        vol[0..16].copy_from_slice(&salt);
         vol[16..16+FULL_SLOT_SIZE].copy_from_slice(&Self::pack(dp, &salt, dd, None)); 
-        vol[16+FULL_SLOT_SIZE..].copy_from_slice(&Self::pack(rp, &salt, rd, kf));
+        vol[16+FULL_SLOT_SIZE..16+(FULL_SLOT_SIZE * 2)].copy_from_slice(&Self::pack(rp, &salt, rd, kf));
 
         let mut f = File::create(path)?;
-        f.write_all(&Self::header(vol.len() as u32))?;
+        f.write_all(&Self::header(total_size as u32))?;
         f.write_all(&vol)?;
         Ok(())
     }

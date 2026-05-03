@@ -1,25 +1,13 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-use spektr::{SpektrVolume, PqcIdentity, PqcTransmission, SpektrError};
-use std::{fs, process, time::Duration};
-use pqc_kyber::{KYBER_PUBLICKEYBYTES, KYBER_SECRETKEYBYTES, KYBER_CIPHERTEXTBYTES};
+use spektr::{SpektrVolume, SpektrError, PqcIdentity, PqcTransmission};
 use obfstr::obfstr as s;
-
-lazy_static::lazy_static! {
-    static ref BANNER: String = s!(
-"
- ███████╗██████╗ ███████╗██╗  ██╗████████╗██████╗      ██████╗  ██████╗ 
- ██╔════╝██╔══██╗██╔════╝██║ ██╔╝╚══██╔══╝██╔══██╗    ██╔═══██╗██╔════╝ 
- ███████╗██████╔╝█████╗  █████╔╝    ██║   ██████╔╝    ╚██████╔╝███████╗ 
- ╚════██║██╔═══╝ ██╔══╝  ██╔═██╗    ██║   ██╔══██╗     ██╔═══╝ ██╔═══██╗
- ███████║██║     ███████╗██║  ██╗   ██║   ██║  ██║     ███████╗╚██████╔╝
- ╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝     ╚══════╝ ╚═════╝ 
-").to_string();
-}
+use pqc_kyber::{KYBER_PUBLICKEYBYTES, KYBER_SECRETKEYBYTES, KYBER_CIPHERTEXTBYTES};
+use std::{fs, process, time::Duration};
 
 #[derive(Parser)]
-#[command(author = "Aleksander Gjotov", version = "1.0", long_about = None)]
+#[command(name = "spektr", version = "2.0-PRO")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -27,189 +15,142 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// [C]reate
+    #[command(name = "c")]
     Create {
         #[arg(short, long)] output: String,
-        #[arg(short = 'p', long)] real_pass: String,
-        #[arg(short = 'd', long)] real_data: String,
-        #[arg(long)] decoy_pass: String,
-        #[arg(long)] decoy_data: String,
-        #[arg(short = 'k', long)] keyfile: Option<String>,
+        #[arg(short, long)] p: String, // Password
+        #[arg(short, long)] d: String, // Data
+        #[arg(long)] dp: String,       // Decoy Password
+        #[arg(long)] dd: String,       // Decoy Data
+        #[arg(short, long)] k: Option<String>, // Keyfile
     },
+    /// [O]pen
+    #[command(name = "o")]
     Open {
         #[arg(short, long)] input: String,
-        #[arg(short, long)] password: String,
+        #[arg(short, long)] p: String,
         #[arg(long, default_value_t = false)] panic: bool,
-        #[arg(short = 'k', long)] keyfile: Option<String>,
+        #[arg(short, long)] k: Option<String>,
     },
-    PqcGen {
-        #[arg(short, long)] name: String,
+    /// [G]en
+    #[command(name = "g")]
+    Gen { #[arg(short, long)] n: String },
+
+    /// [S]eal)
+    #[command(name = "s")]
+    Seal {
+        #[arg(short, long)] output: String, // WAV файл
+        #[arg(short, long)] pubkey: String, // .pub файл
+        #[arg(short, long)] data: String,   // Секрет
     },
-    PqcSeal {
-        #[arg(short, long)] output: String,
-        #[arg(short, long)] pubkey: String,
-        #[arg(short, long)] data: String,
-    },
+    /// [PO] PqcOpen
+    #[command(name = "po")]
     PqcOpen {
-        #[arg(short, long)] input: String,
-        #[arg(short, long)] sealkey: String,
-        #[arg(short, long)] privkey: String,
+        #[arg(short, long)] input: String,   // WAV файл
+        #[arg(short, long)] sealkey: String, // .seal файл
+        #[arg(short, long)] privkey: String, // .sec файл
     }
 }
 
 fn main() {
+
     println!("{}", *BANNER);
     println!("{}", " — CRYPTOGRAPHIC STEGANOGRAPHY SYSTEM — ".on_black().white());
     println!();
 
-    if spektr::anti_forensics_check() {
-        println!("{} {}", s!("[!] ALERT:").red().bold(), s!("VM artifacts or forensic tools detected."));
-        println!("{} {}", s!("[!] STATUS:").red().bold(), s!("System blocked."));
-        std::process::exit(1);
-    }
+    if spektr::anti_forensics_check() { process::exit(0); }
 
     let cli = Cli::parse();
 
     match &cli.command {
         // --- CREATE ---
-        Commands::Create { output, real_pass, real_data, decoy_pass, decoy_data, keyfile } => {
-            let pb = create_spinner("Computing Argon2id + MFA entropy...");
-            let result = SpektrVolume::create(
-                output, real_pass, real_data.as_bytes(), 
-                decoy_pass, decoy_data.as_bytes(), keyfile.as_ref()
-            );
+        Commands::Create { output, p, d, dp, dd, k } => {
+            let pb = create_spinner(s!("INITIALIZING_CORE..."));
+            let result = SpektrVolume::create(output, p, d.as_bytes(), dp, dd.as_bytes(), k.as_ref());
             pb.finish_and_clear();
-
-            match result {
-                Ok(_) => print_success(&format!("Container '{}' created successfully.", output)),
-                Err(e) => handle_spektr_error(e), // Вызываем наш обработчик ошибок
-            }
+            if result.is_ok() { println!("{}", s!("STATUS: OK")); } else { process::exit(1); }
         }
 
         // --- OPEN ---
-        Commands::Open { input, password, panic, keyfile } => {
-            let pb = if *panic {
-                create_spinner(&"Activating Gutmann method...".red().bold().to_string())
-            } else {
-                create_spinner("Auth Hardware DNA...")
-            };
-
-            let result = SpektrVolume::open(input, password, *panic, keyfile.as_ref());
+        Commands::Open { input, p, panic, k } => {
+            let pb = create_spinner(s!("AUTHENTICATING..."));
+            let result = SpektrVolume::open(input, p, *panic, k.as_ref());
             pb.finish_and_clear();
-
             match result {
-                Ok(data) => {
-                    if *panic {
-                        println!("{}", "!!! DATA PHYSICALLY DESTROYED !!!".on_red().white().bold());
-                    } else {
-                        println!("{}", "— ACCESS GRANTED —".green().bold());
-                    }
-                    println!("\n{}\n", String::from_utf8_lossy(&data).bright_white());
-                }
-                Err(e) => handle_spektr_error(e),
+                Ok(data) => println!("{}", String::from_utf8_lossy(&data).bright_white()),
+                Err(e) => handle_error(e),
             }
         }
 
-        // --- PQC-GEN ---
-        Commands::PqcGen { name } => {
-            let pb = create_spinner("ML-KEM-1024 key generation in progress...");
+        // --- GENERATE KEYS ---
+        Commands::Gen { n } => {
             let id = PqcIdentity::generate();
-            
-            fs::write(format!("{}.pub", name), id.public_key.as_slice()).unwrap();
-            fs::write(format!("{}.sec", name), id.secret_key.as_slice()).unwrap();
-            
-            pb.finish_and_clear();
-            print_success(&format!("Keys {}.pub and {}.sec created.", name, name));
+            fs::write(format!("{}.pub", n), id.public_key.as_slice()).unwrap();
+            fs::write(format!("{}.sec", n), id.secret_key.as_slice()).unwrap();
+            println!("{}", s!("PQC_KEYS_STORED"));
         }
 
-        // --- PQC-SEAL ---
-        Commands::PqcSeal { output, pubkey, data } => {
-            let pb = create_spinner("Quantum key encapsulation in progress...");
-            let pub_bytes = fs::read(pubkey).expect("Failed to read .pub key");
+        // --- PQC SEAL  ---
+        Commands::Seal { output, pubkey, data } => {
+            let pb = create_spinner(s!("QUANTUM_SEALING..."));
+            
+            let pub_bytes = fs::read(pubkey).expect("E_PK");
+            let mut pk_arr = [0u8; KYBER_PUBLICKEYBYTES];
+            pk_arr.copy_from_slice(&pub_bytes);
+            let pk = pqc_kyber::PublicKey::from(pk_arr);
 
-            let mut pk = [0u8; KYBER_PUBLICKEYBYTES];
-            pk.copy_from_slice(&pub_bytes);
-            let recipient_pk = pqc_kyber::PublicKey::from(pk);
-
-            let (ct, shared_secret) = PqcTransmission::encapsulate(&recipient_pk);
+            let (ct, shared_secret) = PqcTransmission::encapsulate(&pk);
             let password = hex::encode(shared_secret);
 
-            SpektrVolume::create(
-                output, &password, data.as_bytes(), 
-                "decoy", b"Decoy data", None
-            ).unwrap();
-
+            // Создаем контейнер (Decoy в PQC режиме по умолчанию пустой)
+            SpektrVolume::create(output, &password, data.as_bytes(), s!("decoy"), b" ", None).unwrap();
             fs::write(format!("{}.seal", output), ct).unwrap();
 
             pb.finish_and_clear();
-            print_success(&format!("Container '{}' sealed. Send .wav and .seal files.", output));
+            println!("{}", s!("ENVELOPE_CREATED"));
         }
 
-        // --- PQC-OPEN ---
+        // --- PQC OPEN (НОВЫЙ) ---
         Commands::PqcOpen { input, sealkey, privkey } => {
-            let pb = create_spinner("Decapsulating quantum key...");
-            let sec_bytes = fs::read(privkey).expect("Failed to read .sec key");
+            let pb = create_spinner(s!("DECAPSULATING..."));
+            
+            let sec_bytes = fs::read(privkey).expect("E_SK");
+            let mut sk_arr = [0u8; KYBER_SECRETKEYBYTES];
+            sk_arr.copy_from_slice(&sec_bytes);
+            let sk = pqc_kyber::SecretKey::from(sk_arr);
 
-            let mut sk = [0u8; KYBER_SECRETKEYBYTES];
-            sk.copy_from_slice(&sec_bytes);
-            let my_sk = pqc_kyber::SecretKey::from(sk);
+            let ct = fs::read(sealkey).expect("E_SEAL");
+            if ct.len() != KYBER_CIPHERTEXTBYTES { process::exit(1); }
 
-            let ct = fs::read(sealkey).expect("Failed to read .seal file");
-
-            if ct.len() != KYBER_CIPHERTEXTBYTES {
-                pb.finish_and_clear();
-                print_error(s!("ERROR: Invalid .seal file size."));
-                return;
-            }
-
-            match PqcTransmission::decapsulate(&ct, &my_sk) {
-                Ok(shared_secret) => {
-                    let password = hex::encode(shared_secret);
+            match PqcTransmission::decapsulate(&ct, &sk) {
+                Ok(ss) => {
+                    let password = hex::encode(ss);
                     pb.finish_and_clear();
-
                     match SpektrVolume::open(input, &password, false, None) {
-                        Ok(data) => {
-                            println!("{}", "— QUANTUM ACCESS GRANTED —".green().bold());
-                            println!("\n{}\n", String::from_utf8_lossy(&data).bright_white());
-                        }
-                        Err(e) => handle_spektr_error(e),
+                        Ok(data) => println!("{}", String::from_utf8_lossy(&data).bright_white()),
+                        Err(e) => handle_error(e),
                     }
                 }
-                Err(e) => {
-                    pb.finish_and_clear();
-                    handle_spektr_error(e);
-                }
+                Err(_) => process::exit(1),
             }
         }
     }
 }
 
-// --- UI ---
-
-fn handle_spektr_error(err: SpektrError) {
-    let msg = match err {
-        SpektrError::AuthenticationFailed => s!("AUTH_FAILED: INVALID_KEY_OR_DNA").to_string(),
-        SpektrError::IoError => s!("I/O_FAILURE: FILE_ACCESS_DENIED").to_string(),
-        SpektrError::QuantumKeyError => s!("PQC_ERROR: KEY_DECAPSULATION_FAILED").to_string(),
-        SpektrError::ContainerCorrupted => s!("INTEGRITY_ERROR: DATA_TAMPERED").to_string(),
-        SpektrError::EnvironmentUnsafe => s!("SECURITY_ALERT: UNTRUSTED_ENVIRONMENT").to_string(),
-    };
-    print_error(&msg);
-}
-
-fn create_spinner(msg: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    pb.set_message(msg.to_string());
-    pb.enable_steady_tick(Duration::from_millis(100));
-    pb.set_style(ProgressStyle::with_template("{spinner:.bright.white} {msg}").unwrap()
-        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]));
-    pb
-}
-
-fn print_success(msg: &str) {
-    println!("{} {}", "SUCCESS:".green().bold(), msg);
-}
-
-fn print_error(msg: &str) {
-    println!("{} {}", "ERROR:".red().bold(), msg);
+fn handle_error(err: SpektrError) {
+    match err {
+        SpektrError::AuthenticationFailed => eprintln!("{}", s!("AUTH_ERR_01")),
+        SpektrError::EnvironmentUnsafe => eprintln!("{}", s!("AUTH_ERR_02")),
+        _ => eprintln!("{}", s!("AUTH_ERR_03")),
+    }
     process::exit(1);
+}
+
+fn create_spinner(msg: &'static str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_message(msg);
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb.set_style(ProgressStyle::with_template("{spinner:.cyan} {msg}").unwrap());
+    pb
 }
