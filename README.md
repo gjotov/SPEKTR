@@ -5,7 +5,7 @@
 ---
 
 <a name="english"></a>
-## 🇬🇧 English
+## English
 ### High-Security Steganographic Crypto-System (Version 1.0)
 
 **SPEKTR-26** is a professional-grade cryptographic tool designed for plausible deniability and hardware-bound data protection. It disguises encrypted data as common WAV audio files, making it invisible to DPI systems and forensic analysis.
@@ -24,7 +24,7 @@
 ---
 
 <a name="russian"></a>
-## 🇷🇺 Русский
+## Русский
 ### Скрытая криптосистема повышенной защищенности (Версия 1.0)
 
 **СПЕКТР-26** — это криптографическая система профессионального уровня, предназначенная для обеспечения правдоподобного отрицания и защиты данных с аппаратной привязкой. Система маскирует зашифрованные данные под обычные аудиофайлы WAV, делая их невидимыми для систем DPI и форензик-анализа.
