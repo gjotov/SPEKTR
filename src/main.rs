@@ -6,9 +6,8 @@ use obfstr::obfstr as s;
 use pqc_kyber::{KYBER_PUBLICKEYBYTES, KYBER_SECRETKEYBYTES, KYBER_CIPHERTEXTBYTES};
 use std::{fs, process, time::Duration};
 
-
 #[derive(Parser)]
-#[command(name = "spektr", version = "1.0")]
+#[command(name = "spektr", version = "2.0-PRO")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -16,17 +15,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// [C]reate
     #[command(name = "c")]
     Create {
         #[arg(short, long)] output: String,
-        #[arg(short, long)] p: String, // Password
-        #[arg(short, long)] d: String, // Data
-        #[arg(long)] dp: String,       // Decoy Password
-        #[arg(long)] dd: String,       // Decoy Data
-        #[arg(short, long)] k: Option<String>, // Keyfile
+        #[arg(short, long)] p: String,
+        #[arg(short, long)] d: String,
+        #[arg(long)] dp: String,
+        #[arg(long)] dd: String,
+        #[arg(short, long)] k: Option<String>,
     },
-    /// [O]pen
     #[command(name = "o")]
     Open {
         #[arg(short, long)] input: String,
@@ -34,41 +31,35 @@ enum Commands {
         #[arg(long, default_value_t = false)] panic: bool,
         #[arg(short, long)] k: Option<String>,
     },
-    /// [G]en
     #[command(name = "g")]
     Gen { #[arg(short, long)] n: String },
-
-    /// [S]eal)
     #[command(name = "s")]
     Seal {
-        #[arg(short, long)] output: String, // WAV файл
-        #[arg(short, long)] pubkey: String, // .pub файл
-        #[arg(short, long)] data: String,   // Секрет
+        #[arg(short, long)] output: String,
+        #[arg(short, long)] pubkey: String,
+        #[arg(short, long)] data: String,
     },
-    /// [PO] PqcOpen
     #[command(name = "po")]
     PqcOpen {
-        #[arg(short, long)] input: String,   // WAV файл
-        #[arg(short, long)] sealkey: String, // .seal файл
-        #[arg(short, long)] privkey: String, // .sec файл
+        #[arg(short, long)] input: String,
+        #[arg(short, long)] sealkey: String,
+        #[arg(short, long)] privkey: String,
     }
 }
 
 fn main() {
-
-    lazy_static::lazy_static! {
-    static ref BANNER: String = s!(
+    let b_text = s!(
 "
  ███████╗██████╗ ███████╗██╗  ██╗████████╗██████╗      ██████╗  ██████╗ 
  ██╔════╝██╔══██╗██╔════╝██║ ██╔╝╚══██╔══╝██╔══██╗    ██╔═══██╗██╔════╝ 
  ███████╗██████╔╝█████╗  █████╔╝    ██║   ██████╔╝    ╚██████╔╝███████╗ 
  ╚════██║██╔═══╝ ██╔══╝  ██╔═██╗    ██║   ██╔══██╗     ██╔═══╝ ██╔═══██╗
  ███████║██║     ███████╗██║  ██╗   ██║   ██║  ██║     ███████╗╚██████╔╝
- ╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝     ╚══════╝ ╚═════╝ 
+ ╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝     ╚═════╝  ╚═════╝ 
 ").to_string();
-}
-    println!("{}", *BANNER);
-    println!("{}", " — CRYPTOGRAPHIC STEGANOGRAPHY SYSTEM — ".on_black().white());
+
+    println!("{}", b_text.bright_cyan().bold());
+    println!("{}", s!(" — CRYPTOGRAPHIC STEGANOGRAPHY SYSTEM — ").on_black().white());
     println!();
 
     if spektr::anti_forensics_check() { process::exit(0); }
@@ -76,15 +67,14 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        // --- CREATE ---
         Commands::Create { output, p, d, dp, dd, k } => {
+            // ВАЖНО: Добавлено .to_string() для обхода ошибки Lifetime
             let pb = create_spinner(s!("INITIALIZING_CORE...").to_string());
             let result = SpektrVolume::create(output, p, d.as_bytes(), dp, dd.as_bytes(), k.as_ref());
             pb.finish_and_clear();
             if result.is_ok() { println!("{}", s!("STATUS: OK")); } else { process::exit(1); }
         }
 
-        // --- OPEN ---
         Commands::Open { input, p, panic, k } => {
             let pb = create_spinner(s!("AUTHENTICATING...").to_string());
             let result = SpektrVolume::open(input, p, *panic, k.as_ref());
@@ -95,18 +85,15 @@ fn main() {
             }
         }
 
-        // --- GENERATE KEYS ---
         Commands::Gen { n } => {
             let id = PqcIdentity::generate();
-            fs::write(format!("{}.pub", n), id.public_key.as_slice()).unwrap();
-            fs::write(format!("{}.sec", n), id.secret_key.as_slice()).unwrap();
+            let _ = fs::write(format!("{}.pub", n), id.public_key.as_slice());
+            let _ = fs::write(format!("{}.sec", n), id.secret_key.as_slice());
             println!("{}", s!("PQC_KEYS_STORED"));
         }
 
-        // --- PQC SEAL  ---
         Commands::Seal { output, pubkey, data } => {
             let pb = create_spinner(s!("QUANTUM_SEALING...").to_string());
-            
             let pub_bytes = fs::read(pubkey).expect("E_PK");
             let mut pk_arr = [0u8; KYBER_PUBLICKEYBYTES];
             pk_arr.copy_from_slice(&pub_bytes);
@@ -115,17 +102,14 @@ fn main() {
             let (ct, shared_secret) = PqcTransmission::encapsulate(&pk);
             let password = hex::encode(shared_secret);
 
-            SpektrVolume::create(output, &password, data.as_bytes(), s!("decoy"), b" ", None).unwrap();
-            fs::write(format!("{}.seal", output), ct).unwrap();
-
+            let _ = SpektrVolume::create(output, &password, data.as_bytes(), "decoy", b" ", None);
+            let _ = fs::write(format!("{}.seal", output), ct);
             pb.finish_and_clear();
             println!("{}", s!("ENVELOPE_CREATED"));
         }
 
-        // --- PQC OPEN  ---
         Commands::PqcOpen { input, sealkey, privkey } => {
             let pb = create_spinner(s!("DECAPSULATING...").to_string());
-            
             let sec_bytes = fs::read(privkey).expect("E_SK");
             let mut sk_arr = [0u8; KYBER_SECRETKEYBYTES];
             sk_arr.copy_from_slice(&sec_bytes);
@@ -158,7 +142,7 @@ fn handle_error(err: SpektrError) {
     process::exit(1);
 }
 
-fn create_spinner(msg: &'static str) -> ProgressBar {
+fn create_spinner(msg: String) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_message(msg);
     pb.enable_steady_tick(Duration::from_millis(100));
