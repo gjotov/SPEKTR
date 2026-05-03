@@ -7,7 +7,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use pqc_kyber::*;
-use std::io::{Seek, BufReader};
+use std::io::{Seek, BufReader,SeekFrom,};
+use std::time::Instant;
+use std::thread;
 
 pub const SLOT_SIZE: usize = 1024 * 1024;
 pub const FULL_SLOT_SIZE: usize = 16 + 32 + SLOT_SIZE;
@@ -154,49 +156,47 @@ impl SpektrVolume {
         res
     }
 
-    fn shred(path: &str, size: usize) {
-        let patterns: [[u8; 3]; 27] = [
-            [0x55, 0x55, 0x55], [0xAA, 0xAA, 0xAA], [0x92, 0x49, 0x24],
-            [0x49, 0x24, 0x92], [0x24, 0x92, 0x49], [0x00, 0x00, 0x00],
-            [0x11, 0x11, 0x11], [0x22, 0x22, 0x22], [0x33, 0x33, 0x33],
-            [0x44, 0x44, 0x44], [0x66, 0x66, 0x66], [0x77, 0x77, 0x77],
-            [0x88, 0x88, 0x88], [0x99, 0x99, 0x99], [0xBB, 0xBB, 0xBB],
-            [0xCC, 0xCC, 0xCC], [0xDD, 0xDD, 0xDD], [0xEE, 0xEE, 0xEE],
-            [0xFF, 0xFF, 0xFF], [0x92, 0x49, 0x24], [0x49, 0x24, 0x92],
-            [0x24, 0x92, 0x49], [0x6D, 0xB6, 0xDB], [0xB6, 0xDB, 0x6D],
-            [0xDB, 0x6D, 0xB6], [0x00, 0x00, 0x00], [0xFF, 0xFF, 0xFF]
-        ];
-
+    pub fn shred(path: &str, size: usize) {
         if let Ok(mut f) = OpenOptions::new().write(true).open(path) {
             let mut buf = vec![0u8; size];
-
-            // Phase 1: Random overwrites
+            
             for _ in 0..4 {
                 OsRng.fill_bytes(&mut buf);
-                f.rewind().unwrap();
-                f.write_all(&buf).unwrap();
-                f.sync_all().unwrap(); 
+                let _ = f.seek(SeekFrom::Start(0));
+                let _ = f.write_all(&buf);
+                let _ = f.sync_all();
             }
 
-            // Phase 2: Gutmann-like patterns   
+            let patterns: [[u8; 3]; 27] = [
+                [0x55, 0x55, 0x55], [0xAA, 0xAA, 0xAA], [0x92, 0x49, 0x24],
+                [0x49, 0x24, 0x92], [0x24, 0x92, 0x49], [0x00, 0x00, 0x00],
+                [0x11, 0x11, 0x11], [0x22, 0x22, 0x22], [0x33, 0x33, 0x33],
+                [0x44, 0x44, 0x44], [0x66, 0x66, 0x66], [0x77, 0x77, 0x77],
+                [0x88, 0x88, 0x88], [0x99, 0x99, 0x99], [0xBB, 0xBB, 0xBB],
+                [0xCC, 0xCC, 0xCC], [0xDD, 0xDD, 0xDD], [0xEE, 0xEE, 0xEE],
+                [0xFF, 0xFF, 0xFF], [0x92, 0x49, 0x24], [0x49, 0x24, 0x92],
+                [0x24, 0x92, 0x49], [0x6D, 0xB6, 0xDB], [0xB6, 0xDB, 0x6D],
+                [0xDB, 0x6D, 0xB6], [0x00, 0x00, 0x00], [0xFF, 0xFF, 0xFF]
+            ];
+
             for p in patterns.iter() {
                 for i in 0..size {
                     buf[i] = p[i % 3];
                 }
-                f.rewind().unwrap();
-                f.write_all(&buf).unwrap();
-                f.sync_all().unwrap();
+                let _ = f.seek(SeekFrom::Start(0));
+                let _ = f.write_all(&buf);
+                let _ = f.sync_all();
             }
 
-            // Phase 3: Final random pass
             for _ in 0..4 {
                 OsRng.fill_bytes(&mut buf);
-                f.rewind().unwrap();
-                f.write_all(&buf).unwrap();
-                f.sync_all().unwrap();
+                let _ = f.seek(SeekFrom::Start(0));
+                let _ = f.write_all(&buf);
+                let _ = f.sync_all();
             }
         }
-        let _ = std::fs::remove_file(path); // Detele the file after shredding
+        
+        let _ = std::fs::remove_file(path);
     }
 
     fn header(sz: u32) -> [u8; 44] {
@@ -295,4 +295,39 @@ impl PqcTransmission {
         master_key.copy_from_slice(&shared_secret);
         Ok(master_key)
     }
+}
+
+
+pub fn anti_forensics_check() -> bool {
+    let mut suspicion_score = 0;
+
+    // 1. Check number of cores
+    // Sandboxes (Cuckoo, Any.Run) and analyst VMs are often limited to 1-2 cores for cost savings.
+    let cores = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    if cores <= 2 {
+        suspicion_score += 1;
+    }
+
+    // 2. Timing attack (Time Distortion)
+    // In a virtual machine or under a debugger, API calls (e.g., sleep) 
+    // are processed through the hypervisor, causing micro-delays.
+    let start = Instant::now();
+    thread::sleep(std::time::Duration::from_millis(10));
+    let elapsed = start.elapsed().as_millis();
+    if elapsed > 25 { // If 10ms turned into 25ms+ -> we're being intercepted
+        suspicion_score += 1;
+    }
+
+    // 3. Computational anomaly (Instruction Tracing Check)
+    // If code is executed step-by-step (in a debugger), this loop will take forever.
+    let math_start = Instant::now();
+    let mut _x = 0u64;
+    for i in 0..1_000_000 {
+        _x = _x.wrapping_add(i);
+    }
+    if math_start.elapsed().as_millis() > 50 {
+        suspicion_score += 1;
+    }
+
+    suspicion_score >= 2
 }
