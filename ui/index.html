@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SPEKTR-26</title>
+    <style>
+        body { background: #000; color: #888; font-family: 'Consolas', monospace; padding: 40px; margin: 0; font-size: 13px; }
+        .header { color: #fff; border-bottom: 1px solid #222; padding-bottom: 10px; margin-bottom: 30px; display: flex; justify-content: space-between; }
+        .nav { margin-bottom: 30px; }
+        .nav-btn { background: none; border: 1px solid #222; color: #444; padding: 5px 15px; cursor: pointer; margin-right: 5px; font-family: inherit; }
+        .nav-btn.active { border-color: #fff; color: #fff; }
+        .panel { max-width: 500px; display: none; }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; color: #444; margin-bottom: 5px; font-size: 10px; text-transform: uppercase; }
+        input { background: transparent; border: none; border-bottom: 1px solid #222; color: #fff; width: 100%; padding: 5px 0; outline: none; font-family: inherit; }
+        input:focus { border-bottom-color: #fff; }
+        .action-btn { background: #fff; color: #000; border: none; padding: 10px 20px; cursor: pointer; font-family: inherit; font-weight: bold; margin-top: 15px; text-transform: uppercase; }
+        .file-link { color: #fff; text-decoration: underline; cursor: pointer; }
+        .status { margin-top: 50px; border-top: 1px solid #111; padding-top: 20px; font-size: 11px; }
+        #log { color: #fff; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <span>SPEKTR-26 // CORE_v2.2</span>
+        <span id="dna">DNA: [....]</span>
+    </div>
+
+    <div class="nav">
+        <button class="nav-btn active" id="b-enc" onclick="tab('enc')">01_ENCRYPT</button>
+        <button class="nav-btn" id="b-dec" onclick="tab('dec')">02_DECRYPT</button>
+        <button class="nav-btn" id="b-qnt" onclick="tab('qnt')">03_QUANTUM</button>
+        <button class="nav-btn" id="b-net" onclick="tab('net')">04_NETWORK</button>
+    </div>
+
+    <div id="p-enc" class="panel" style="display: block;">
+        <div class="input-group"><label>Target WAV</label><span class="file-link" id="l-save" onclick="sel('s')">Set path...</span></div>
+        <div class="input-group"><label>MFA Keyfile</label><span class="file-link" id="l-key" onclick="sel('k')">Optional...</span></div>
+        <div class="input-group"><label>Master Pass</label><input type="password" id="i-pass"></div>
+        <div class="input-group"><label>Payload</label><input type="text" id="i-data"></div>
+        <button class="action-btn" onclick="runCreate()">Init</button>
+    </div>
+
+    <div id="p-dec" class="panel">
+        <div class="input-group"><label>Source WAV</label><span class="file-link" id="l-open" onclick="sel('o')">Select file...</span></div>
+        <div class="input-group"><label>MFA Keyfile</label><span class="file-link" id="l-key2" onclick="sel('k')">Select keyfile...</span></div>
+        <div class="input-group"><label>Password</label><input type="password" id="i-pass2"></div>
+        <button class="action-btn" onclick="runOpen()">Unlock</button>
+    </div>
+
+    <div id="p-qnt" class="panel">
+        <label>Identity Name</label><input type="text" id="q-name">
+        <button class="action-btn" onclick="runQGen()">Generate</button>
+        <div style="margin-top: 40px;">
+            <label>Seal with Public Key</label>
+            <span class="file-link" id="l-qpub" onclick="sel('qpub')">Select .pub...</span>
+            <input type="text" id="q-data" placeholder="Data to seal...">
+            <button class="action-btn" onclick="runQSeal()">Seal</button>
+        </div>
+    </div>
+
+<div id="p-net" class="panel">
+    <div class="input-group">
+        <label>Operational Mode</label>
+        <select id="n-mode" style="background:#000; color:#fff; border:1px solid #222; width:100%; padding:5px; font-family:inherit;">
+            <option value="listen">LISTEN (Wait for connection)</option>
+            <option value="send">TRANSMIT (Send secret)</option>
+        </select>
+    </div>
+    <div class="input-group">
+        <label>IP Address : Port</label>
+        <input type="text" id="n-addr" placeholder="e.g. 127.0.0.1:9942 or 9942">
+    </div>
+    <div id="send-input-group" class="input-group" style="display:none;">
+        <label>Data to Transmit</label>
+        <input type="text" id="n-data">
+    </div>
+    <button class="action-btn" onclick="runP2P()">Initialize Link</button>
+</div>
+
+    <div class="status">SYSTEM_LOG: <span id="log">Awaiting...</span></div>
+
+    <script>
+        const { invoke } = window.__TAURI__.core;
+        const { save, open } = window.__TAURI__.dialog;
+        let state = { save: "", open: "", keyfile: "", qpub: "" };
+
+window.tab = (n) => {
+    ['enc', 'dec', 'qnt', 'net'].forEach(t => {
+        document.getElementById('p-'+t).style.display = (t === n) ? 'block' : 'none';
+        document.getElementById('b-'+t).classList.toggle('active', t === n);
+    });
+};
+
+        window.sel = async (t) => {
+            let r = (t==='s') ? await save({filters:[{name:'WAV',extensions:['wav']}]}) : await open({filters:[{name:'WAV',extensions:['wav','pub']}]});
+            if (!r) return;
+            let path = Array.isArray(r) ? r[0] : r;
+            let name = path.split(/[\\/]/).pop();
+            if (t==='s') { state.save = path; document.getElementById('l-save').innerText = name; }
+            if (t==='o') { state.open = path; document.getElementById('l-open').innerText = name; }
+            if (t==='k') { state.keyfile = path; document.getElementById('l-key').innerText = name; document.getElementById('l-key2').innerText = name; }
+            if (t==='qpub') { state.qpub = path; document.getElementById('l-qpub').innerText = name; }
+        };
+
+        window.runCreate = async () => {
+            try {
+                let res = await invoke('gui_create', { output: state.save, pass: document.getElementById('i-pass').value, data: document.getElementById('i-data').value, keyfile: state.keyfile || null });
+                document.getElementById('log').innerText = res;
+            } catch (e) { document.getElementById('log').innerText = e; }
+        };
+
+        window.runOpen = async () => {
+            try {
+                let res = await invoke('gui_open', { input: state.open, pass: document.getElementById('i-pass2').value, keyfile: state.keyfile || null });
+                document.getElementById('log').innerText = "SUCCESS: " + res;
+            } catch (e) { document.getElementById('log').innerText = e; }
+        };
+
+        window.runQGen = async () => {
+            let res = await invoke('gui_pqc_gen', { name: document.getElementById('q-name').value });
+            document.getElementById('log').innerText = res;
+        };
+
+        window.runQSeal = async () => {
+            try {
+                let res = await invoke('gui_pqc_seal', { output: "envelope.wav", pubkeyPath: state.qpub, data: document.getElementById('q-data').value });
+                document.getElementById('log').innerText = res;
+            } catch (e) { document.getElementById('log').innerText = e; }
+        };
+
+        (async () => { document.getElementById('dna').innerText = "DNA: " + await invoke('get_dna'); })();
+
+        document.getElementById('n-mode').onchange = (e) => {
+    document.getElementById('send-input-group').style.display = (e.target.value === 'send') ? 'block' : 'none';
+};
+
+window.runP2P = async () => {
+    const log = document.getElementById('log');
+    const mode = document.getElementById('n-mode').value;
+    const addr = document.getElementById('n-addr').value;
+    const data = document.getElementById('n-data').value;
+
+    try {
+        if (mode === 'listen') {
+            log.innerText = "> LISTENING ON PORT " + addr + ". WAITING FOR PQ-HANDSHAKE...";
+            let res = await invoke('gui_p2p_listen', { port: addr });
+            log.innerHTML = "> INCOMING_DATA_DECRYPTED:\n\n" + res;
+        } else {
+            log.innerText = "> ATTEMPTING HANDSHAKE WITH " + addr + "...";
+            let res = await invoke('gui_p2p_send', { addr: addr, data: data });
+            log.innerText = "> STATUS: " + res;
+        }
+    } catch (e) { log.innerText = "> NET_ERROR: " + e; }
+};
+    </script>
+</body>
+</html>

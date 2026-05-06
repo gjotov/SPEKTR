@@ -1,0 +1,26 @@
+{
+  "productName": "spektr",
+  "version": "2.0.0",
+  "identifier": "com.spektr.dev",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "SPEKTR-26",
+        "width": 800,
+        "height": 600,
+        "label": "main"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

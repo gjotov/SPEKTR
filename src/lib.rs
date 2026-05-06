@@ -10,6 +10,7 @@ use std::thread;
 use sysinfo::{System, Disks};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use pqc_kyber::*;
+use std::net::{TcpListener, TcpStream};
 
 pub const SLOT_SIZE: usize = 1024 * 1024;
 pub const FULL_SLOT_SIZE: usize = 16 + 32 + SLOT_SIZE;
@@ -186,6 +187,54 @@ fn derive_keys(p: &str, s: &[u8; 16], kf: Option<&String>) -> ([u8; 32], [u8; 32
 pub struct SpektrVolume;
 
 impl SpektrVolume {
+pub fn p2p_listen(port: &str) -> Result<(Vec<u8>, [u8; 32]), SpektrError> {
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
+        // Программа замрет тут, пока кто-то не подключится
+        let (mut stream, _) = listener.accept()?;
+
+        // 1. PQ-Handshake: Генерируем временные ключи
+        let id = PqcIdentity::generate();
+        stream.write_all(id.public_key.as_slice())?;
+
+        // 2. Получаем запечатанный секрет от отправителя
+        let mut ct = [0u8; KYBER_CIPHERTEXTBYTES];
+        stream.read_exact(&mut ct)?;
+
+        // 3. Декапсуляция секрета
+        let ss = PqcTransmission::decapsulate(&ct, &id.secret_key)?;
+
+        // 4. Получаем зашифрованную полезную нагрузку
+        let mut data_buf = Vec::new();
+        stream.read_to_end(&mut data_buf)?;
+
+        Ok((data_buf, ss))
+    }
+
+    /// Прямая передача данных (Отправитель)
+    pub fn p2p_send(target: &str, data: &[u8]) -> Result<(), SpektrError> {
+        let mut stream = TcpStream::connect(target)?;
+
+        // 1. Получаем публичный ключ от получателя
+        let mut pk_arr = [0u8; KYBER_PUBLICKEYBYTES];
+        stream.read_exact(&mut pk_arr)?;
+        let pk = pqc_kyber::PublicKey::from(pk_arr);
+
+        // 2. Генерируем сеансовый ключ и запечатываем его
+        let (ct, ss) = PqcTransmission::encapsulate(&pk);
+
+        // 3. Отправляем "конверт"
+        stream.write_all(&ct)?;
+
+        // 4. Шифруем данные ядром SpektrCore
+        let mut encrypted = data.to_vec();
+        let core = SpektrCore::new(&ss); // Используем Shared Secret как ключ
+        core.process(&mut encrypted, &[0xCC; 16]); // Сеансовый nonce
+
+        // 5. Передаем зашифрованный поток и закрываем соединение
+        stream.write_all(&encrypted)?;
+        Ok(())
+    }
+
     pub fn create(path: &str, rp: &str, rd: &[u8], dp: &str, dd: &[u8], kf: Option<&String>) -> Result<(), SpektrError> {
         let mut salt = [0u8; 16]; OsRng.fill_bytes(&mut salt);
 
@@ -233,7 +282,7 @@ impl SpektrVolume {
         Err(SpektrError::AuthenticationFailed)
     }
 
-    fn pack(p: &str, s: &[u8; 16], d: &[u8], kf: Option<&String>) -> Vec<u8> {
+    pub fn pack(p: &str, s: &[u8; 16], d: &[u8], kf: Option<&String>) -> Vec<u8> {
         let k = derive_keys(p, s, kf);
         let mut n = [0u8; 16]; OsRng.fill_bytes(&mut n);
         let mut pt = vec![0u8; SLOT_SIZE]; OsRng.fill_bytes(&mut pt);
@@ -262,7 +311,7 @@ impl SpektrVolume {
         let _ = std::fs::remove_file(path);
     }
 
-    fn header(sz: u32) -> [u8; 44] {
+    pub fn header(sz: u32) -> [u8; 44] {
         let mut h = [0u8; 44];
         h[0..4].copy_from_slice(b"RIFF"); h[4..8].copy_from_slice(&(sz + 36).to_le_bytes());
         h[8..16].copy_from_slice(b"WAVEfmt "); h[16..20].copy_from_slice(&16u32.to_le_bytes());

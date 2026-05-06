@@ -1,0 +1,11 @@
+[[permission]]
+identifier = "allow-all-commands"
+description = "Разрешает вызов всех команд"
+commands.allow = [
+    "get_dna_short",
+    "gui_create",
+    "gui_open",
+    "gui_pqc_gen",
+    "gui_pqc_seal",
+    
+]

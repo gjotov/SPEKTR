@@ -1,0 +1,15 @@
+{
+  "identifier": "default",
+  "description": "Main Capability",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "core:app:default",
+    "core:window:default",
+    "core:webview:default",
+    "core:event:default"
+    
+  ]
+}
